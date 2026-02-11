@@ -24,7 +24,7 @@ correct = [p["correct"] for p in problems_sorted]
 
 # ── Create the figure ──
 fig, (ax_main, ax_stats) = plt.subplots(
-    1, 2, figsize=(16, 7),
+    1, 2, figsize=(16, 8),
     gridspec_kw={"width_ratios": [3, 1]},
 )
 fig.patch.set_facecolor("#FAFAFA")
@@ -129,29 +129,19 @@ stats = [
 ]
 
 for i, (label, value, color) in enumerate(stats):
-    y = 0.62 - i * 0.12
+    y = 0.65 - i * 0.13
     ax_stats.text(
         0.5, y, value,
         transform=ax_stats.transAxes,
-        fontsize=18, fontweight="bold", color=color,
+        fontsize=16, fontweight="bold", color=color,
         ha="center", va="center",
     )
     ax_stats.text(
         0.5, y - 0.04, label,
         transform=ax_stats.transAxes,
-        fontsize=9, color="#999999",
+        fontsize=8, color="#999999",
         ha="center", va="center",
     )
-
-# Footer
-ax_stats.text(
-    0.5, 0.04,
-    "DeepSeek-R1 1.5B\nOllama (local Mac)\nReal logprobs + threshold tuning",
-    transform=ax_stats.transAxes,
-    fontsize=9, color="#AAAAAA",
-    ha="center", va="bottom",
-    style="italic",
-)
 
 # Subtitle
 fig.text(
