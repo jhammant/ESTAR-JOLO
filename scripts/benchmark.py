@@ -54,11 +54,12 @@ def main() -> None:
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
 
-    device = args.device if args.device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
+    from estar.utils import get_device
+    device = get_device(args.device)
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+        torch_dtype=torch.float16 if device in ("cuda", "mps") else torch.float32,
         device_map=device if device == "cuda" else None,
         trust_remote_code=True,
     )

@@ -140,12 +140,53 @@ def normalize_answer(answer: str) -> str:
     # Remove LaTeX formatting
     answer = re.sub(r"\\text\{([^}]*)\}", r"\1", answer)
     answer = re.sub(r"\\mathrm\{([^}]*)\}", r"\1", answer)
+    answer = re.sub(r"\\,", "", answer)  # thin space
     answer = re.sub(r"[\\{}\s$]", "", answer)
+    # Remove trailing units/symbols
+    answer = re.sub(r"(cm|km|m|kg|g|s|%|degrees?)$", "", answer)
+    # Remove variable assignments like "x="
+    answer = re.sub(r"^[a-z]\s*=\s*", "", answer)
     return answer
+
+
+def _extract_number(s: str) -> Optional[float]:
+    """Try to extract a numeric value from a string."""
+    s = normalize_answer(s)
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
 
 
 def answers_match(a: Optional[str], b: Optional[str]) -> bool:
     """Check if two answers match after normalization."""
     if a is None or b is None:
         return False
-    return normalize_answer(a) == normalize_answer(b)
+    na, nb = normalize_answer(a), normalize_answer(b)
+    if na == nb:
+        return True
+    # Try numeric comparison
+    fa, fb = _extract_number(a), _extract_number(b)
+    if fa is not None and fb is not None:
+        return abs(fa - fb) < 1e-4 * max(abs(fa), abs(fb), 1)
+    return False
+
+
+def get_device(requested: str = "auto") -> str:
+    """Determine the best available device.
+
+    Args:
+        requested: "auto", "cuda", "mps", or "cpu".
+
+    Returns:
+        Device string suitable for torch.
+    """
+    if requested != "auto":
+        return requested
+
+    import torch
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"

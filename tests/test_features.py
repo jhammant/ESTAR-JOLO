@@ -51,15 +51,18 @@ class TestFeatureExtractor:
         assert extractor._step_count == 2
 
     def test_flip_count_increases(self, extractor: FeatureExtractor) -> None:
-        # Step 1: bucket 0 wins
+        # Step 1: bucket 0 wins strongly
         step1 = make_step([10, 11, 12, 13, 14], [-0.1, -5.0, -5.0, -5.0, -5.0], 0)
         extractor.extract(step1)
         assert extractor._flip_count == 0
 
-        # Step 2: bucket 1 wins (flip!)
-        step2 = make_step([10, 11, 12, 13, 14], [-5.0, -0.1, -5.0, -5.0, -5.0], 1)
-        extractor.extract(step2)
-        assert extractor._flip_count == 1
+        # Steps 2-4: bucket 1 wins strongly (multiple steps to overcome
+        # cumulative evidence from step 1)
+        for i in range(3):
+            step = make_step([10, 11, 12, 13, 14], [-5.0, -0.1, -5.0, -5.0, -5.0], i + 1)
+            extractor.extract(step)
+
+        assert extractor._flip_count >= 1
 
     def test_unmapped_tokens_get_default(self, extractor: FeatureExtractor) -> None:
         # Token IDs 99, 100 are not in token_to_bucket

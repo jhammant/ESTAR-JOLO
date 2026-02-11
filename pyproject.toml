@@ -30,6 +30,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ollama = ["ollama>=0.4"]
 vllm = ["vllm>=0.4"]
 dev = ["pytest", "ruff"]
 

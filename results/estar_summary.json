@@ -1,0 +1,122 @@
+{
+  "model": "deepseek-r1:1.5b",
+  "backend": "ollama",
+  "num_problems": 10,
+  "accuracy": 90.0,
+  "total_full_tokens": 3371,
+  "total_estar_tokens": 2119,
+  "total_saved": 1252,
+  "reduction_ratio": 1.59,
+  "problems": [
+    {
+      "question": "What is the sum of all prime numbers less than 20?",
+      "short": "Sum primes<20",
+      "gold": "77",
+      "model_answer": "77",
+      "thinking_tokens": 632,
+      "estar_tokens": 620,
+      "tokens_saved": 12,
+      "correct": true,
+      "time": 28.5
+    },
+    {
+      "question": "Solve for x: 3x + 7 = 22",
+      "short": "Linear eq",
+      "gold": "5",
+      "model_answer": "5",
+      "thinking_tokens": 123,
+      "estar_tokens": 123,
+      "tokens_saved": 0,
+      "correct": true,
+      "time": 10.03
+    },
+    {
+      "question": "What is 15% of 240?",
+      "short": "Percentage",
+      "gold": "36",
+      "model_answer": "36",
+      "thinking_tokens": 89,
+      "estar_tokens": 89,
+      "tokens_saved": 0,
+      "correct": true,
+      "time": 8.12
+    },
+    {
+      "question": "What is the square root of 144?",
+      "short": "Square root",
+      "gold": "12",
+      "model_answer": "12",
+      "thinking_tokens": 209,
+      "estar_tokens": 165,
+      "tokens_saved": 44,
+      "correct": true,
+      "time": 14.56
+    },
+    {
+      "question": "If f(x) = 2x^2 - 3x + 1, what is f(4)?",
+      "short": "Quadratic",
+      "gold": "21",
+      "model_answer": "21",
+      "thinking_tokens": 170,
+      "estar_tokens": 159,
+      "tokens_saved": 11,
+      "correct": true,
+      "time": 14.72
+    },
+    {
+      "question": "A rectangle has length 12cm and width 5cm. What is the perimeter?",
+      "short": "Perimeter",
+      "gold": "34",
+      "model_answer": "34\\,\\text{cm",
+      "thinking_tokens": 188,
+      "estar_tokens": 188,
+      "tokens_saved": 0,
+      "correct": false,
+      "time": 11.6
+    },
+    {
+      "question": "What is 2^10?",
+      "short": "Power",
+      "gold": "1024",
+      "model_answer": "1024",
+      "thinking_tokens": 160,
+      "estar_tokens": 154,
+      "tokens_saved": 6,
+      "correct": true,
+      "time": 10.27
+    },
+    {
+      "question": "How many degrees are in the interior angles of a triangle?",
+      "short": "Triangle angles",
+      "gold": "180",
+      "model_answer": "180",
+      "thinking_tokens": 1522,
+      "estar_tokens": 472,
+      "tokens_saved": 1050,
+      "correct": true,
+      "time": 65.73
+    },
+    {
+      "question": "What is the GCD of 48 and 18?",
+      "short": "GCD",
+      "gold": "6",
+      "model_answer": "6",
+      "thinking_tokens": 165,
+      "estar_tokens": 69,
+      "tokens_saved": 96,
+      "correct": true,
+      "time": 13.14
+    },
+    {
+      "question": "Convert 3/4 to a percentage.",
+      "short": "Fraction to %",
+      "gold": "75",
+      "model_answer": "75\\%",
+      "thinking_tokens": 113,
+      "estar_tokens": 80,
+      "tokens_saved": 33,
+      "correct": true,
+      "time": 10.48
+    }
+  ]
+}
