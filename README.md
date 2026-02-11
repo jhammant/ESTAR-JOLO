@@ -1,8 +1,8 @@
-# JOLO — Jon Only Lives Once
+# ESTAR-JOLO — Jon Only Lives Once
 
 **Stop your LLM from overthinking.**
 
-JOLO implements [ESTAR-LITE](https://arxiv.org/abs/2502.10004) — a lightweight LightGBM classifier that watches an LLM's reasoning tokens in real-time and calls "stop" when the answer has already been reached. No retraining, no architecture changes. Just fewer wasted tokens.
+ESTAR-JOLO implements [ESTAR-LITE](https://arxiv.org/abs/2502.10004) — a lightweight LightGBM classifier that watches an LLM's reasoning tokens in real-time and calls "stop" when the answer has already been reached. No retraining, no architecture changes. Just fewer wasted tokens.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)

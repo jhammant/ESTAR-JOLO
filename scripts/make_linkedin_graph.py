@@ -156,7 +156,7 @@ ax_stats.text(
 # Subtitle
 fig.text(
     0.02, 0.01,
-    "JOLO: Real Ollama logprobs, threshold/patience tuning, adaptive stopping  |  github.com/jhammant/JOLO",
+    "ESTAR-JOLO: Real Ollama logprobs, threshold/patience tuning, adaptive stopping  |  github.com/jhammant/ESTAR-JOLO",
     fontsize=9, color="#999999", style="italic",
 )
 

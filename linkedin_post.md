@@ -1,6 +1,6 @@
 Your reasoning model is wasting tokens. Here's how to stop it.
 
-I built JOLO - an implementation of ESTAR-LITE that watches an LLM's chain-of-thought in real time and calls "stop" when the answer has already been reached.
+I built ESTAR-JOLO - an implementation of ESTAR-LITE that watches an LLM's chain-of-thought in real time and calls "stop" when the answer has already been reached.
 
 The "triangle angles" problem? DeepSeek-R1 used 1,522 thinking tokens. It only needed 472. That's 69% waste on a single question.
 
@@ -22,6 +22,6 @@ Results on 10 math problems with DeepSeek-R1 1.5B running locally via Ollama:
 
 The paper (ESTAR, Wang et al. 2025) reports 3.7x reduction on larger models. The gap is the logprobs - now that they're real, the next run should close it significantly.
 
-Open source: github.com/jhammant/JOLO
+Open source: github.com/jhammant/ESTAR-JOLO
 
 #LLM #AI #MachineLearning #DeepLearning #Optimization #OpenSource
