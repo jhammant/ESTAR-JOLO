@@ -1,178 +1,276 @@
-# ESTAR-LITE
+# JOLO — Jon Only Lives Once
 
-**Early-Stopping Token-Aware Reasoning for Efficient LLM Inference**
+**Stop your LLM from overthinking.**
 
-> Independent implementation based on [arXiv:2602.10004](https://arxiv.org/abs/2602.10004), not affiliated with the original authors.
+JOLO implements [ESTAR-LITE](https://arxiv.org/abs/2502.10004) — a lightweight LightGBM classifier that watches an LLM's reasoning tokens in real-time and calls "stop" when the answer has already been reached. No retraining, no architecture changes. Just fewer wasted tokens.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-## What is ESTAR-LITE?
+---
 
-Large reasoning models (LRMs) like DeepSeek-R1 generate long chains-of-thought to solve problems, but **often keep reasoning long after they've already found the correct answer**. ESTAR-LITE detects this redundancy and stops reasoning early.
+## The Problem
 
-**Key result from the paper:** **3.7× fewer reasoning tokens** while preserving accuracy (74.9% → 74.2% on average across benchmarks).
-
-### How It Works
-
-ESTAR-LITE is a lightweight **LightGBM classifier** that monitors token log-probabilities during generation and predicts when reasoning can be safely stopped:
+Reasoning models like DeepSeek-R1 think out loud. That's great — until they keep going long after they've found the answer:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  LLM Generating Chain-of-Thought                        │
-│                                                         │
-│  <think>                                                │
-│    Step 1: Let me analyze...                            │
-│    Step 2: Using the formula...                         │
-│    Step 3: The answer is 42.          ◄── ESTAR-LITE    │
-│    Step 4: Let me verify...               says STOP!    │
-│    Step 5: Actually, double-checking...   (skipped)     │
-│    Step 6: Yes, 42 is correct.            (skipped)     │
-│  </think>                                               │
-│                                                         │
-│  The answer is 42. ✓                                    │
-└─────────────────────────────────────────────────────────┘
+<think>
+  Step 1: A triangle has three interior angles...        ← useful
+  Step 2: The angle sum property states they sum to 180° ← got it
+  Step 3: Let me verify with a proof...                  ← unnecessary
+  Step 4: Consider a Euclidean plane...                  ← still going
+  Step 5: By the parallel postulate...                   ← please stop
+  ...
+  Step 12: Therefore, 180°. ✓                            ← 1,050 tokens wasted
+</think>
 ```
 
-### Feature Groups
+That's real — the "triangle angles" problem in our test used **1,522 thinking tokens** when **472 were enough**.
 
-The classifier uses 4 feature groups extracted from top-k token log-probabilities at each step:
+## Results
 
-| Group | Features | What it captures |
-|-------|----------|-----------------|
-| **Instantaneous Evidence** | Per-class probability from token log-probs | Current answer preference |
-| **Cumulative Path & Stability** | Running evidence, flip counts, changed_prev | Decision stickiness |
-| **Early-Stop Curvature** | Slope (S_es) and second difference (H_es) | Convergence / saturation |
-| **Token Confidence Stats** | Mean/var of log-probs, neg perplexity, length | Overall model confidence |
+Tested locally with DeepSeek-R1 1.5B via Ollama on a Mac:
+
+![ESTAR-LITE Results](results/estar_linkedin_graph.png)
+
+| Metric | Value |
+|--------|-------|
+| Token reduction | **1.6x** |
+| Accuracy | **90%** (9/10 correct) |
+| Mean savings | **37%** |
+| Best case | **69%** fewer tokens (Triangle angles) |
+
+The pattern: problems where the model overthinks the most get the biggest savings. Easy problems that are already fast get left alone.
+
+## How It Works
+
+A small LightGBM classifier monitors four signal groups from the token stream at each generation step:
+
+| Signal | What it watches |
+|--------|----------------|
+| **Instantaneous evidence** | Per-answer probability from token log-probs |
+| **Cumulative stability** | Running evidence totals, how often the leading answer flips |
+| **Early-stop curvature** | Is the evidence converging or still moving? |
+| **Token confidence** | Mean/variance of log-probs, effective perplexity |
+
+When the classifier is confident the answer has stabilized (threshold `τ=0.9`, sustained for 3 consecutive steps), it injects `</think>` and lets the model produce its final answer.
 
 ## Quick Start
 
-### Install
+### With Ollama (easiest)
+
+```bash
+# Install
+pip install -e ".[ollama]"
+
+# Pull a reasoning model
+ollama pull deepseek-r1:1.5b
+
+# Run the full test suite + generate graph
+python scripts/test_and_graph.py
+```
+
+### With HuggingFace Transformers
 
 ```bash
 pip install -e .
 ```
 
-### 1. Generate Training Data
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from estar import EstarClassifier, EstarGenerator
 
-Generate chains-of-thought, slice at 10–100%, and create (features, labels) pairs:
+model = AutoModelForCausalLM.from_pretrained(
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", device_map="auto"
+)
+tokenizer = AutoTokenizer.from_pretrained(
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+)
+classifier = EstarClassifier.load("models/estar_lite")
+
+generator = EstarGenerator(
+    model=model, tokenizer=tokenizer, classifier=classifier
+)
+result = generator.generate("Solve: 2x + 5 = 13")
+
+print(f"Answer: {result.answer}")
+print(f"Tokens: {result.thinking_tokens} (stopped_early={result.stopped_early})")
+```
+
+### Training Your Own Classifier
 
 ```bash
+# 1. Generate training data (chains-of-thought sliced at 10-100%)
 python scripts/generate_training_data.py \
     --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
     --dataset math500 \
     --output data/training_data.npz
-```
 
-### 2. Train the Classifier
-
-```bash
+# 2. Train
 python scripts/train_classifier.py \
     --data data/training_data.npz \
     --output models/estar_lite
 ```
 
-### 3. Run Inference with Early Stopping
+### Training Data Diversity
 
-```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from estar import EstarClassifier, EstarGenerator
+The classifier generalizes better when trained on diverse problem types. You can combine data from multiple sources.
 
-model = AutoModelForCausalLM.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", device_map="auto")
-tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
-classifier = EstarClassifier.load("models/estar_lite")
+**Custom datasets** use a simple JSON format:
 
-generator = EstarGenerator(model=model, tokenizer=tokenizer, classifier=classifier)
-result = generator.generate("<|im_start|>user\nSolve: 2x + 5 = 13<|im_end|>\n<|im_start|>assistant\n")
-
-print(f"Answer: {result.answer}")
-print(f"Thinking tokens: {result.thinking_tokens} (stopped_early={result.stopped_early})")
+```json
+[
+  {"question": "What is 2 + 2?", "answer": "4"},
+  {"question": "Solve for x: 3x = 12", "answer": "4"}
+]
 ```
 
-### 4. Demo & Benchmark
+Pass custom JSON to the training data generator:
 
 ```bash
-# Side-by-side comparison
-python scripts/demo.py --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --classifier models/estar_lite
-
-# Full benchmark
-python scripts/benchmark.py --classifier models/estar_lite --dataset math500 --max-samples 100
+python scripts/generate_training_data.py \
+    --model deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B \
+    --dataset custom \
+    --custom-file my_problems.json \
+    --output data/custom_data.npz
 ```
 
-## Results Format
+**Supported datasets:**
 
-The benchmark script outputs results in this format:
+| Dataset | Flag | Source | Problem type |
+|---------|------|--------|-------------|
+| MATH-500 | `--dataset math500` | HuggingFaceH4/MATH-500 | Competition math |
+| GSM8K | `--dataset gsm8k` | openai/gsm8k | Grade school math |
+| Custom JSON | `--dataset custom --custom-file FILE` | Local file | Any |
 
-| Method | Accuracy | Avg Think Tokens |
-|--------|----------|-----------------|
-| Full Reasoning | X.X% | XXXX |
-| ESTAR-LITE | X.X% | XXXX |
+**Adding a new dataset loader:** Add a branch to `load_dataset()` in `scripts/generate_training_data.py` that returns `list[dict]` with `"question"` and `"answer"` keys.
 
-**Paper results (Qwen3-8B, 4 benchmarks average):**
-- Full reasoning: 74.9% accuracy, 4799 tokens
-- ESTAR (full system): 74.2% accuracy, 1290 tokens (3.7× reduction)
-- ESTAR-LITE (classifier only): ≥95% relative accuracy, 2–6× reduction
+**Combining multiple `.npz` files** for diverse training:
+
+```bash
+# Generate data from different sources
+python scripts/generate_training_data.py --dataset math500 --output data/math500.npz
+python scripts/generate_training_data.py --dataset gsm8k --output data/gsm8k.npz
+
+# Combine them
+python -c "
+import numpy as np
+files = ['data/math500.npz', 'data/gsm8k.npz']
+Xs, ys = [], []
+for f in files:
+    d = np.load(f)
+    Xs.append(d['X']); ys.append(d['y'])
+np.savez('data/combined.npz', X=np.vstack(Xs), y=np.concatenate(ys),
+         feature_names=np.load(files[0])['feature_names'])
+"
+
+# Train on combined data
+python scripts/train_classifier.py --data data/combined.npz --output models/estar_lite
+```
+
+### Tuning Threshold and Patience
+
+The threshold (`tau`) and patience values are inference-time parameters — you train the model once, then sweep stopping criteria to find the best trade-off.
+
+```bash
+# From existing training data
+python scripts/tune_threshold.py --data data/training_data.npz
+
+# From test results (regenerates synthetic features)
+python scripts/tune_threshold.py --results results/estar_summary.json
+
+# Custom grid + save best config
+python scripts/tune_threshold.py --data data/training_data.npz \
+    --thresholds 0.5 0.7 0.8 0.9 0.95 \
+    --patience-values 1 2 3 5 \
+    --save-best --output models/tuned_config.json
+```
+
+The script prints a table of accuracy vs savings for each (threshold, patience) pair and highlights the best combination.
+
+### Adaptive Patience
+
+Fixed patience works well for uniform workloads, but you can scale patience with problem difficulty — longer sequences get more leeway before stopping.
+
+**Formula:**
+
+```
+patience = max(2, min(5, tokens_so_far // 100))
+```
+
+Short problems (< 200 tokens) use `patience=2` for fast stopping. Long problems (500+ tokens) use `patience=5` to avoid premature cuts on complex reasoning.
+
+**Subclass approach** — override `should_stop()` in the classifier:
+
+```python
+from estar.classifier import EstarClassifier
+
+class AdaptiveEstarClassifier(EstarClassifier):
+    def should_stop(self, features, tokens_so_far: int = 0) -> bool:
+        self.patience = max(2, min(5, tokens_so_far // 100))
+        return super().should_stop(features)
+```
+
+**Inline modification** — patch directly in `generate_online()`:
+
+```python
+# Inside the token-by-token loop, before classifier.should_stop():
+classifier.patience = max(2, min(5, thinking_tokens // 100))
+```
+
+**When to use:**
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Uniform problem difficulty | Fixed patience (default `3`) |
+| Mixed easy/hard problems | Adaptive patience |
+| Latency-sensitive applications | Lower fixed patience (`1`-`2`) |
+| Accuracy-critical applications | Higher fixed patience (`4`-`5`) or adaptive |
 
 ## Project Structure
 
 ```
-estar-lite/
 ├── estar/
-│   ├── __init__.py        # Package exports
-│   ├── features.py        # Feature extraction (4 groups)
-│   ├── classifier.py      # LightGBM wrapper
-│   ├── generator.py       # HuggingFace generation with early-stopping
-│   └── utils.py           # Answer extraction, token mapping
+│   ├── features.py           # Feature extraction (4 signal groups)
+│   ├── classifier.py         # LightGBM wrapper with patience logic
+│   ├── generator.py          # HuggingFace generation + early stopping
+│   ├── ollama_generator.py   # Ollama backend (with real logprob support)
+│   └── utils.py              # Answer extraction, normalization
 ├── scripts/
+│   ├── test_and_graph.py     # End-to-end test with results graph
+│   ├── make_linkedin_graph.py# Polished bar chart generator
+│   ├── demo_ollama.py        # Quick Ollama demo
 │   ├── generate_training_data.py
 │   ├── train_classifier.py
-│   ├── demo.py
+│   ├── tune_threshold.py     # Threshold/patience grid sweep
 │   └── benchmark.py
 ├── tests/
 │   └── test_features.py
-├── examples/
-│   └── quickstart.py
-├── pyproject.toml
-├── LICENSE
-└── README.md
+└── results/
+    ├── estar_summary.json    # Raw test results
+    └── estar_linkedin_graph.png
 ```
-
-## Configuration
-
-### Classifier Hyperparameters (from paper)
-
-| Parameter | Value |
-|-----------|-------|
-| n_estimators | 400 |
-| num_leaves | 63 |
-| learning_rate | 0.07 |
-| subsample | 0.9 |
-| colsample_bytree | 0.9 |
-| threshold (τ) | 0.9 |
-| patience | 3 consecutive steps |
-
-### Recommended Models
-
-- **DeepSeek-R1-Distill-Qwen-1.5B** — smallest, runs on consumer hardware
-- **DeepSeek-R1-Distill-Qwen-7B** — better accuracy
-- **Qwen3-8B** — used in the paper
 
 ## Scope
 
-This implementation covers **ESTAR-LITE only** — the lightweight LightGBM classifier component. The full ESTAR system in the paper also includes:
-- **ESTAR-FT**: Supervised fine-tuning to teach models to emit `<stop>` tokens
-- **ESTAR-RL**: Reinforcement learning with compute-aware rewards
+This implements **ESTAR-LITE only** — the inference-time classifier. The full ESTAR system from the paper also includes:
 
-These require model fine-tuning infrastructure and are not included here.
+- **ESTAR-FT** — fine-tuning models to emit `<stop>` tokens themselves
+- **ESTAR-RL** — reinforcement learning with compute-aware rewards
 
-## Citation
+Those require model training infrastructure and aren't included here.
+
+## Paper
+
+Based on [ESTAR: Early-Stopping Token-Aware Reasoning for Efficient Inference](https://arxiv.org/abs/2502.10004) by Wang, Yang, Zhang, Batra & Tillman (2025). This is an independent implementation, not affiliated with the original authors.
 
 ```bibtex
 @article{wang2025estar,
-  title={ESTAR: Early-Stopping Token-Aware Reasoning for Efficient Inference},
-  author={Wang, Junda and Yang, Zhichao and Zhang, Dongxu and Batra, Sanjit Singh and Tillman, Robert E.},
-  journal={arXiv preprint arXiv:2602.10004},
-  year={2025}
+  title   = {ESTAR: Early-Stopping Token-Aware Reasoning for Efficient Inference},
+  author  = {Wang, Junda and Yang, Zhichao and Zhang, Dongxu and
+             Batra, Sanjit Singh and Tillman, Robert E.},
+  journal = {arXiv preprint arXiv:2502.10004},
+  year    = {2025}
 }
 ```
 

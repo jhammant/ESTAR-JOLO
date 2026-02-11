@@ -13,6 +13,7 @@ And a running Ollama server with the model pulled:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass
@@ -68,6 +69,80 @@ def _parse_think_blocks(text: str) -> tuple[str, str]:
     return text, ""
 
 
+def _token_text_to_id(token_text: str) -> int:
+    """Hash a token string to a stable synthetic integer ID.
+
+    Ollama logprobs use token strings, not integer IDs. We hash the text
+    to produce a deterministic int that can be used in token_to_bucket maps.
+    """
+    return int(hashlib.md5(token_text.encode()).hexdigest()[:8], 16)
+
+
+def _ollama_logprobs_to_step_data(
+    logprob_entry: dict,
+    step: int,
+    top_k: int = 20,
+) -> StepLogProbs:
+    """Convert an Ollama logprob entry to StepLogProbs.
+
+    Ollama returns logprobs as a list of {token: str, logprob: float} dicts
+    (via the ``Logprob`` object). This converts them to the array format
+    expected by FeatureExtractor, hashing token text to synthetic int IDs.
+
+    Pads with dummy entries if fewer than top_k tokens are available;
+    truncates if more.
+    """
+    top_logprobs = logprob_entry.get("top_logprobs", [])
+    if not top_logprobs:
+        token_text = logprob_entry.get("token", "")
+        lp_val = logprob_entry.get("logprob", -5.0)
+        top_logprobs = [{"token": token_text, "logprob": lp_val}]
+
+    ids = []
+    lps = []
+    for entry in top_logprobs[:top_k]:
+        tok = entry.get("token", "")
+        lp = entry.get("logprob", -5.0)
+        ids.append(_token_text_to_id(tok))
+        lps.append(float(lp))
+
+    # Pad to top_k if needed
+    while len(ids) < top_k:
+        ids.append(0)
+        lps.append(-30.0)
+
+    return StepLogProbs(
+        token_ids=np.array(ids, dtype=np.int64),
+        log_probs=np.array(lps, dtype=np.float64),
+        step=step,
+    )
+
+
+def _build_ollama_token_to_bucket(answer_set: list[str]) -> dict[int, int]:
+    """Build bucket mapping from hashed token strings for answer tokens.
+
+    For each answer surface form (e.g. "0"-"9" or "A"-"E"), hashes the
+    token text to produce the same synthetic ID that ``_token_text_to_id``
+    would generate, enabling FeatureExtractor bucket lookups.
+    """
+    token_to_bucket: dict[int, int] = {}
+    for bucket_idx, ans in enumerate(answer_set):
+        # Map common surface forms for each answer token
+        for variant in [ans, ans.lower(), ans.upper(), f" {ans}", f" {ans.lower()}", f" {ans.upper()}"]:
+            tid = _token_text_to_id(variant)
+            token_to_bucket[tid] = bucket_idx
+    return token_to_bucket
+
+
+def _make_fake_step_data(step: int, top_k: int = 20) -> StepLogProbs:
+    """Create synthetic step data as fallback when real logprobs are unavailable."""
+    fake_ids = np.arange(top_k, dtype=np.int64)
+    fake_logprobs = np.random.uniform(-5.0, -0.1, top_k).astype(np.float64)
+    fake_logprobs.sort()
+    fake_logprobs = fake_logprobs[::-1]
+    return StepLogProbs(token_ids=fake_ids, log_probs=fake_logprobs, step=step)
+
+
 class OllamaEstarGenerator:
     """ESTAR-LITE generator using Ollama as the inference backend.
 
@@ -76,6 +151,8 @@ class OllamaEstarGenerator:
         classifier: Trained EstarClassifier (None for baseline-only mode).
         task_type: "open" or "closed".
         host: Ollama server URL (default: http://localhost:11434).
+        use_logprobs: Request real logprobs from Ollama. Disable if your
+            Ollama version doesn't support ``logprobs``/``top_logprobs``.
     """
 
     def __init__(
@@ -84,11 +161,13 @@ class OllamaEstarGenerator:
         classifier: Optional[EstarClassifier] = None,
         task_type: str = "open",
         host: Optional[str] = None,
+        use_logprobs: bool = True,
     ) -> None:
         self.model = model
         self.classifier = classifier
         self.task_type = task_type
         self.host = host
+        self.use_logprobs = use_logprobs
         self._ollama = _get_ollama_client()
 
     def generate_full(
@@ -178,19 +257,34 @@ class OllamaEstarGenerator:
             },
             "stream": True,
         }
+        if self.use_logprobs:
+            kwargs["options"]["logprobs"] = True
+            kwargs["options"]["top_logprobs"] = num_top_tokens
 
         # Collect tokens from streaming response
         tokens = []
         full_text = ""
+        has_real_logprobs = False
         for chunk in self._ollama.generate(**kwargs):
             token_text = chunk.get("response", "")
             full_text += token_text
-            tokens.append({
+            token_entry = {
                 "text": token_text,
                 "done": chunk.get("done", False),
-            })
+            }
+            # Capture logprobs if available
+            chunk_logprobs = chunk.get("logprobs")
+            if chunk_logprobs:
+                token_entry["logprobs"] = chunk_logprobs
+                has_real_logprobs = True
+            tokens.append(token_entry)
             if chunk.get("done", False):
                 break
+
+        if has_real_logprobs:
+            logger.info("Using real logprobs from Ollama for simulation")
+        else:
+            logger.info("Ollama did not return logprobs — falling back to synthetic")
 
         thinking, answer_text = _parse_think_blocks(full_text)
         answer = extract_answer(answer_text, self.task_type)
@@ -199,11 +293,14 @@ class OllamaEstarGenerator:
         ans_set = default_answer_set(self.task_type)
         num_buckets = len(ans_set)
 
-        # For simulation without real logprobs, create synthetic features
-        # based on text patterns (this is an approximation for demo purposes)
+        if has_real_logprobs:
+            token_to_bucket = _build_ollama_token_to_bucket(ans_set)
+        else:
+            token_to_bucket = {}
+
         feature_extractor = FeatureExtractor(
             num_buckets=num_buckets,
-            token_to_bucket={},  # empty — we'll use synthetic features
+            token_to_bucket=token_to_bucket,
             top_k=num_top_tokens,
         )
 
@@ -213,22 +310,33 @@ class OllamaEstarGenerator:
         stop_prob = None
 
         # Walk through the thinking portion token by token
-        think_tokens_list = thinking.split()
-        total_think_tokens = len(think_tokens_list)
+        # Count how many tokens fall in the thinking section
+        think_char_count = 0
+        think_token_indices = []
+        for i, tok in enumerate(tokens):
+            if tok["done"]:
+                break
+            think_char_count += len(tok["text"])
+            # Check if we've passed the thinking portion
+            if think_char_count > len(thinking) + len("<think>"):
+                break
+            think_token_indices.append(i)
 
-        for step_idx in range(total_think_tokens):
-            # Create synthetic step data (uniform logprobs as placeholder)
-            # In real Ollama logprobs mode, these would come from the API
-            fake_ids = np.arange(num_top_tokens)
-            fake_logprobs = np.random.uniform(-5.0, -0.1, num_top_tokens).astype(np.float64)
-            fake_logprobs.sort()  # Sort descending-ish
-            fake_logprobs = fake_logprobs[::-1]
+        total_think_tokens = len(think_token_indices)
+        if total_think_tokens == 0:
+            total_think_tokens = max(1, len(thinking.split()))
+            think_token_indices = list(range(total_think_tokens))
 
-            step_data = StepLogProbs(
-                token_ids=fake_ids,
-                log_probs=fake_logprobs,
-                step=step_idx,
-            )
+        for step_idx, tok_idx in enumerate(think_token_indices):
+            tok = tokens[tok_idx] if tok_idx < len(tokens) else {}
+
+            # Use real logprobs if available, otherwise fake
+            if has_real_logprobs and "logprobs" in tok:
+                step_data = _ollama_logprobs_to_step_data(
+                    tok["logprobs"], step=step_idx, top_k=num_top_tokens
+                )
+            else:
+                step_data = _make_fake_step_data(step_idx, top_k=num_top_tokens)
 
             features = feature_extractor.extract(step_data, total_steps=total_think_tokens)
             prob = self.classifier.predict_proba(features)
@@ -291,12 +399,18 @@ class OllamaEstarGenerator:
         if self.classifier is None:
             raise RuntimeError("Classifier required for generate_online(). Load one first.")
 
-        # Phase 1: Generate thinking tokens one at a time
+        num_top = 20
         ans_set = default_answer_set(self.task_type)
+
+        if self.use_logprobs:
+            token_to_bucket = _build_ollama_token_to_bucket(ans_set)
+        else:
+            token_to_bucket = {}
+
         feature_extractor = FeatureExtractor(
             num_buckets=len(ans_set),
-            token_to_bucket={},
-            top_k=20,
+            token_to_bucket=token_to_bucket,
+            top_k=num_top,
         )
         self.classifier.reset_patience()
 
@@ -313,16 +427,21 @@ class OllamaEstarGenerator:
             if not in_thinking:
                 break
 
-            response = self._ollama.generate(
-                model=self.model,
-                prompt=context,
-                options={
+            gen_kwargs: dict = {
+                "model": self.model,
+                "prompt": context,
+                "options": {
                     "temperature": temperature,
                     "num_predict": 1,
                 },
-                stream=False,
-                raw=True,
-            )
+                "stream": False,
+                "raw": True,
+            }
+            if self.use_logprobs:
+                gen_kwargs["options"]["logprobs"] = True
+                gen_kwargs["options"]["top_logprobs"] = num_top
+
+            response = self._ollama.generate(**gen_kwargs)
 
             token_text = response.get("response", "")
             context += token_text
@@ -334,14 +453,15 @@ class OllamaEstarGenerator:
                 in_thinking = False
                 break
 
-            # Create synthetic features (would use real logprobs if available)
-            fake_ids = np.arange(20)
-            fake_logprobs = np.random.uniform(-5.0, -0.1, 20).astype(np.float64)
-            step_data = StepLogProbs(
-                token_ids=fake_ids,
-                log_probs=fake_logprobs,
-                step=step,
-            )
+            # Extract logprobs — real if available, fake otherwise
+            resp_logprobs = response.get("logprobs")
+            if self.use_logprobs and resp_logprobs:
+                step_data = _ollama_logprobs_to_step_data(
+                    resp_logprobs, step=step, top_k=num_top
+                )
+            else:
+                step_data = _make_fake_step_data(step, top_k=num_top)
+
             features = feature_extractor.extract(step_data)
 
             if self.classifier.should_stop(features):
