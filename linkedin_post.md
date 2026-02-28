@@ -1,27 +1,35 @@
-Your reasoning model is wasting tokens. Here's how to stop it.
+Your reasoning model is wasting tokens. Mine was too.
 
-I built ESTAR-JOLO - an implementation of ESTAR-LITE that watches an LLM's chain-of-thought in real time and calls "stop" when the answer has already been reached.
+I asked DeepSeek-R1 "how many degrees in a triangle?" It used 1,522 thinking tokens. It found 180 after 472. The other 1,050 tokens were the model double-checking, re-proving, and re-confirming what it already knew.
 
-The "triangle angles" problem? DeepSeek-R1 used 1,522 thinking tokens. It only needed 472. That's 69% waste on a single question.
+This isn't a bug. It's how reasoning models work. They think out loud and don't know when to stop.
 
-Just shipped 4 improvements that make it actually production-ready:
+So I built ESTAR-JOLO - a lightweight classifier that watches an LLM's chain-of-thought in real time and says "you're done" when the answer has stabilized.
 
-1. Real logprobs from Ollama - the classifier was running blind on random data. Now it reads actual token probabilities from the inference engine. The difference between a coin flip and real signal.
+How it works:
 
-2. Threshold tuning script - train once, sweep (threshold x patience) combinations on your validation set. Find the accuracy/savings sweet spot without touching model code.
+A small LightGBM model monitors four signals from the token stream at each generation step:
+- Instantaneous evidence: what answer do the current token probabilities point to?
+- Cumulative stability: has the leading answer been consistent, or is it still flipping?
+- Early-stop curvature: is confidence converging or still moving?
+- Token confidence: how sure is the model about each token it's generating?
 
-3. Training data diversity - combine MATH-500, GSM8K, and your own custom datasets. Better generalization across problem types.
+When all signals agree the answer is locked in (threshold 0.9, sustained for 3 steps), it injects </think> and lets the model produce its final answer.
 
-4. Adaptive patience - short problems stop fast (patience=2), hard problems get more runway (patience=5). Formula: max(2, min(5, tokens // 100)).
+No fine-tuning. No architecture changes. No retraining. Just an external classifier reading logprobs.
 
-Results on 10 math problems with DeepSeek-R1 1.5B running locally via Ollama:
+Results on 10 math problems with DeepSeek-R1 1.5B running locally on my Mac via Ollama:
 - 1.6x token reduction
 - 90% accuracy preserved
 - 37% mean savings
-- No retraining. No architecture changes.
+- Best case: 69% fewer tokens (triangle angles)
 
-The paper (ESTAR, Wang et al. 2025) reports 3.7x reduction on larger models. The gap is the logprobs - now that they're real, the next run should close it significantly.
+The pattern is clear: problems where the model overthinks the most get the biggest savings. Easy problems that are already fast get left alone.
 
-Open source: github.com/jhammant/ESTAR-JOLO
+The implementation includes real logprob extraction from Ollama, a threshold/patience tuning script to find your optimal stopping criteria, support for combining multiple training datasets, and adaptive patience that scales with problem difficulty.
+
+Based on the ESTAR paper (Wang et al. 2025) which reports 3.7x reduction on larger models. This is an independent open-source implementation of the ESTAR-LITE component.
+
+github.com/jhammant/ESTAR-JOLO
 
 #LLM #AI #MachineLearning #DeepLearning #Optimization #OpenSource
